@@ -58,6 +58,8 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 侧边栏的**插件**页 → 安装组合包 → 目标指向本目录；或让 Agent 调用 `plugin_manager` 的 `install_bundle`，`target` 填本目录的绝对路径。装完打开一个**新会话**，第一个步骤就会带上指针。
 
+已经装过组合包、但 DSH 是装之前启动的：运行中的进程不会重新发布运行时组合，**重启一次 DSH** 才会真正加载本插件。
+
 ## 配置
 
 在 profile 的 `cordis.patch.yml` 里覆盖这一行的 `config`：
@@ -105,8 +107,17 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-- 逻辑级：`node test/run.mjs`，12 项通过——覆盖同工作目录优先、全局回退、有无交接文档、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断。
-- 未做：装进真实 profile 后的端到端注入验证。本仓库未在你的 DSH 里安装过，README 不声称已验证到那一步。
+**逻辑级**：`node test/run.mjs`，12 项通过——覆盖同工作目录优先、全局回退、有无交接文档、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断。
+
+**真实 DSH 进程里确认到的**（0.2.0-rc.2）：
+
+- 插件能被加载：`import { createUserMessage } from '@deepseek-ai/dsh-llm'` 与 `import z from '@deepseek-ai/schemastery'` 都能解析。`dsh plugin --profile <p> add .` 装成组合包、以及 `file:///` 直接挂载，两条路都试通了。
+- `apply(ctx, config)` 会被调用，`inject: ['sessionQuery']` 得到满足，`Config` 校验通过，config 会连默认补齐一起传进来。实测传入 `{"language":"en","enabled":true}` 时，`apply` 收到的是 `{"enabled":true,"language":"en","handoffPaths":[]}`——没提供的数组字段被补成了**空数组**，所以 `apply` 里对空数组做了兜底。
+- 真实 `agent/pre-step` 上的形状：新会话的第一次请求是 `turn=1, step=1`；`agent.session.header.cwd` 是工作区绝对路径；`ctx.sessionQuery.listSessions()` 一次返回 154 条会话记录。
+
+**踩到的坑（已修，值得记住）**：`Config` 里用 schemastery 的链式 `.default(...)` 会让配置校验失败，插件**静默不激活**——`apply` 根本不被调用，日志里什么都不写。改成纯类型声明、默认值放到 `apply` 里用 `??` 兜底就好了。这个坑只有装进真实 profile 才暴露得出来，逻辑测试发现不了。
+
+**没有验证到最后一步**：没能观测到「注入的消息真的进入那一步的消息批次」。原因是本机 Desktop 的运行进程在安装组合包后不会重新发布运行时组合（要重启 DSH 才生效），而重启会打断正在进行的会话；改用一次性 CLI 会话时它能加载并激活插件，却卡在模型调用阶段拿不到输出。要彻底闭环：重启一次 DSH，开个新会话，看那一轮里有没有 `Continuity: ...` 的注入行。
 
 ## 开发
 

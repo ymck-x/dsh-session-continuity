@@ -34,13 +34,13 @@ const MAX_TITLE_CHARS = 48
 
 export const Config = z.object({
   /** 关掉它即可完全停止注入，不必卸载插件。 */
-  enabled: z.boolean().default(true),
+  enabled: z.boolean(),
   /** 注入文本的语言：`en` 或 `zh`。 */
-  language: z.string().default('en'),
+  language: z.string(),
   /** 相对工作目录的交接文档候选路径，取第一个存在的。 */
-  handoffPaths: z.array(z.string()).default([...DEFAULT_HANDOFF_PATHS]),
+  handoffPaths: z.array(z.string()),
   /** 会话标题在指针里的最大字符数，超出即截断。 */
-  maxTitleChars: z.number().default(MAX_TITLE_CHARS),
+  maxTitleChars: z.number(),
 })
 
 /**
