@@ -1,0 +1,7 @@
+# 会话接续指针：新会话的第一个模型步骤注入一次，之后不再注入。
+- insert:
+    - id: session-continuity
+      name: dsh-session-continuity
+      config:
+        enabled: true
+        language: en

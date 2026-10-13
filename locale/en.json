@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Continuity",
+    "description": "Injects one tiny pointer to the previous session on the first step of a new session. Never copies session transcripts."
+  }
+}

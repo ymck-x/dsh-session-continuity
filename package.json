@@ -1,0 +1,37 @@
+{
+  "name": "dsh-session-continuity",
+  "version": "0.1.0",
+  "description": "新会话开始时只注入一条极小的接续指针，指向上一个会话与工作区交接文档；不搬运会话原文。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "session",
+    "context",
+    "tokens"
+  ],
+  "license": "MIT"
+}
