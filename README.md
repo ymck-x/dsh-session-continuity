@@ -47,7 +47,7 @@ Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, 
 固定版本，推荐：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.1.0.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.1.1.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -59,10 +59,17 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.1.0
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.1.1
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
+
+### 版本
+
+| tag | 说明 |
+|---|---|
+| `v0.1.1` | 补 `peerDependenciesMeta.optional`（消除 pnpm 的 peer 警告）与仓库元数据 |
+| `v0.1.0` | 首个可安装版本 |
 
 ### 从本地目录安装
 
