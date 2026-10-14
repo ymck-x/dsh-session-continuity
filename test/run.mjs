@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ensureStubs, cleanupStubs } from './stubs.mjs'
@@ -20,6 +20,10 @@ const { apply, inject, name } = await import('../index.js')
 const workspace = mkdtempSync(join(tmpdir(), 'dsh-continuity-'))
 writeFileSync(join(workspace, 'HANDOFF.md'), '# handoff\n')
 const bareWorkspace = mkdtempSync(join(tmpdir(), 'dsh-continuity-bare-'))
+// 带子目录的交接文档：用来验证注入文本里的路径写法。
+const nestedWorkspace = mkdtempSync(join(tmpdir(), 'dsh-continuity-nested-'))
+mkdirSync(join(nestedWorkspace, '.dsh'), { recursive: true })
+writeFileSync(join(nestedWorkspace, '.dsh', 'handoff.md'), '# handoff\n')
 const otherWorkspace = join(tmpdir(), 'dsh-continuity-elsewhere')
 
 const selfRecord = { header: { id: 'session-self', cwd: workspace, createdAt: Date.UTC(2026, 9, 13) } }
@@ -311,6 +315,34 @@ test('有交接文档时不带结尾片段', async () => {
   const text = injected(decision).content[0].text
   assert.match(text, /HANDOFF\.md/)
   assert.doesNotMatch(text, /不该出现/)
+})
+
+test('交接文档路径统一用正斜杠', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord])
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: nestedWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /\.dsh\/handoff\.md/)
+  assert.doesNotMatch(text, /\\/, '注入文本里不该出现平台相关的反斜杠')
+})
+
+test('引用文本里的代码围栏被压平', async () => {
+  const surface = [
+    userEvent('看看这段'),
+    assistantEvent('结果是这样：\n```js\nconst a = 1\n```\n就这些'),
+  ]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.doesNotMatch(text, /```/, '代码围栏不能原样进注入文本')
+  assert.match(text, /'''/)
 })
 
 test('标题缺失时退回会话 id', async () => {

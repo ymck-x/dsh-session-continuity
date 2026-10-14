@@ -15,7 +15,7 @@
  */
 
 import { statSync } from 'node:fs'
-import { isAbsolute, join, relative } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 
@@ -170,9 +170,19 @@ async function readTail(ctx, sessionId, budgetBytes, signal) {
 
   const perMessage = Math.max(80, Math.floor(budgetBytes / 2))
   return {
-    user: lastUser === undefined ? undefined : clipBytes(lastUser, perMessage),
-    assistant: lastAssistant === undefined ? undefined : clipBytes(lastAssistant, perMessage),
+    user: lastUser === undefined ? undefined : clipBytes(sanitizeQuoted(lastUser), perMessage),
+    assistant: lastAssistant === undefined ? undefined : clipBytes(sanitizeQuoted(lastAssistant), perMessage),
   }
+}
+
+/**
+ * 引用一段别人的文本前先压掉会撑破结构的连续反引号围栏。
+ *
+ * 注入的内容是 Markdown 里的普通引用；原文里的 ``` 会让后面的内容被读成代码块，
+ * 甚至把本条消息的其余部分一起吞掉。
+ */
+function sanitizeQuoted(text) {
+  return text.replace(/`{2,}/g, "'''")
 }
 
 /**
@@ -261,7 +271,8 @@ function findHandoff(cwd, handoffPaths) {
       const stats = statSync(absolute)
       if (stats.isFile()) {
         return {
-          display: relative(cwd, absolute) || candidate,
+          // 注入文本里统一用正斜杠：模型读到的路径不该随宿主平台变形。
+          display: (relative(cwd, absolute) || candidate).split(sep).join('/'),
           mtimeMs: stats.mtimeMs,
         }
       }

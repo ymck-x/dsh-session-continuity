@@ -44,6 +44,8 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 | 没交接文档，带最后两句 | 211 字符 / 299 字节 | 148 字符 / 342 字节 |
 | 没交接文档，`tailBytes: 0` | 146 字符 / 166 字节 | — |
 
+真机实测（会话日志里的原文，样本不同所以数字不同）：有交接文档 147 字节；中文 + 带结尾 559 字节。**上限**是「头部约 160 字节 + `tailBytes`（默认 500）+ 包装约 60 字节」，最坏约 720 字节——预算约束的是两条原文各自的大小，不约束整条消息。
+
 ## 为什么不是「引用上一个会话」
 
 | 做法 | 新会话一次性吃进 |
@@ -64,7 +66,7 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 固定版本，推荐：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.0.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.1.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -76,7 +78,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.0
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.1
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -85,6 +87,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.2.1` | 修复：引用文本里的代码围栏压平、交接文档路径统一正斜杠（真机验证时发现） |
 | `v0.2.0` | 没交接文档时补上「上个会话的最后两句」（受 `tailBytes` 约束） |
 | `v0.1.3` | 修复：子代理会话不再被当成「上一个会话」（端到端验证时发现） |
 | `v0.1.2` | 仅文档：补上端到端验证结论（重启后注入成功，附会话日志证据） |
@@ -151,6 +154,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 - 任何失败（会话查询服务不可用、文件读不到、标题读不出）都只是**不注入**，原样放行这一轮，不影响正常对话。
 - 注入的消息带来源 `kind: 'session-continuity'`，在会话记录里可识别、可回放，不会被当作用户手打的输入。
 - 补最后两句时，只认来源为真实用户的 `user/message`（`source.kind === 'user'`）：既不会把别的插件注入的上下文（时间读数、技能目录、上一次的接续指针）当成用户的话，也不会让本插件递归引用自己。读取失败一律当作没有——绝不因为要补一段结尾而拖住这一轮。
+- 原文进注入文本前会压平连续反引号（` ``` ` → `'''`），否则一段带代码块的回复会把后面的内容读成代码；交接文档的路径统一写成正斜杠，不随宿主平台变形。这两条都是真机验证时从实际注入里发现的。
 
 ## 已知限制
 
@@ -161,13 +165,14 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-**逻辑级**：`node test/run.mjs`，19 项通过——覆盖同工作目录优先、全局回退、有无交接文档、补最后两句、只认真实用户输入、字节预算截断、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退。
+**逻辑级**：`node test/run.mjs`，21 项通过——覆盖同工作目录优先、全局回退、有无交接文档、补最后两句、只认真实用户输入、字节预算截断、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退、交接文档路径写法、代码围栏压平。
 
 **真实 DSH 进程里确认到的**（0.2.0-rc.2）：
 
 - **依赖解析正确**：在插件目录下没有 `node_modules` 时，`@deepseek-ai/dsh-llm` 解析到 `…/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-llm/lib/index.js`，`@deepseek-ai/schemastery` 同样落在 `app.asar` 内——即 DSH 自带的真包，不是别处的副本。
 - `apply(ctx, config)` 会被调用，`inject: ['sessionQuery']` 得到满足，`Config` 能通过**真** schemastery 的校验，config 会连默认补齐一起传进来。实测传入 `{"language":"en","enabled":true}` 时，`apply` 收到的是 `{"enabled":true,"language":"en","handoffPaths":[]}`——没提供的数组字段被补成了**空数组**，所以 `apply` 里对空数组做了兜底。
 - 真实 `agent/pre-step` 上的形状：新会话的第一次请求是 `turn=1, step=1`；`agent.session.header.cwd` 是工作区绝对路径；`ctx.sessionQuery.listSessions()` 一次返回 154 条会话记录。
+- **四条分支都在真机上跑过**（重启 DSH 后用全新子会话触发，原文从会话日志里读）：英文 + 有交接文档 147 字节；英文 + 无交接文档（带结尾两句）394 字节；中文 + 有交接文档 154 字节；中文 + 无交接文档 559 字节。中文那两次顺带证明了「用户在 `cordis.patch.yml` 里覆盖 `config`」确实生效——home 级补丁的改动会被热加载，不用再重启。
 
 **踩到的两个坑（都已修，值得记住）**：
 
