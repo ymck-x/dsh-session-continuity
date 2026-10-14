@@ -64,19 +64,29 @@ export const Config = z.object({
  *
  * @param configured - 配置里的 `language`；显式给 `en`/`zh` 时直接采纳。
  * @param messages - 这一步拟进入的消息批次。
+ * @param fallbackTitle - 上一轮没有「用户手打」消息时的兜底依据（上个会话的标题）。
  * @returns `'en'` 或 `'zh'`。
  */
-function resolveLanguage(configured, messages) {
+function resolveLanguage(configured, messages, fallbackTitle) {
   if (configured === 'zh' || configured === 'en') return configured
   for (const message of messages) {
     if (message?.role !== 'user') continue
     if (message?.source?.kind !== 'user') continue
     const text = blockText(message.content)
     if (text === undefined) continue
-    if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(text)) return 'zh'
-    return 'en'
+    return hasCjk(text) ? 'zh' : 'en'
+  }
+  // 兜底：这一轮没有「用户手打」的消息（例如子代理的任务消息，来源不是 `user`），
+  // 就看上一个会话的标题——它由 DSH 按用户第一句话生成，语言跟着用户。
+  if (typeof fallbackTitle === 'string' && fallbackTitle !== '') {
+    return hasCjk(fallbackTitle) ? 'zh' : 'en'
   }
   return 'en'
+}
+
+/** 文本里有没有中日韩文字。 */
+function hasCjk(text) {
+  return /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(text)
 }
 
 /**
@@ -111,9 +121,7 @@ export function apply(ctx, config) {
 
     let text
     try {
-      // 语言跟随这一轮用户自己写的话，而不是配置里的固定值。
-      const language = resolveLanguage(options.language, decision.messages)
-      text = await buildPointer(ctx, agent, { ...options, language }, signal)
+      text = await buildPointer(ctx, agent, options, decision.messages, signal)
     } catch (error) {
       ctx.logger?.warn?.(`session-continuity: ${error instanceof Error ? error.message : String(error)}`)
       return decision
@@ -134,7 +142,7 @@ export function apply(ctx, config) {
  * 找到应当被指向上一个会话，并渲染一行极小的指针。
  * @returns 注入文本；没有可指的会话时返回 `undefined`。
  */
-async function buildPointer(ctx, agent, options, signal) {
+async function buildPointer(ctx, agent, options, messages, signal) {
   const sessionQuery = ctx.sessionQuery
   if (sessionQuery === undefined) return undefined
 
@@ -163,13 +171,15 @@ async function buildPointer(ctx, agent, options, signal) {
   const continuity = handoff === undefined
     ? await readContinuity(ctx, previous.header.id, options, signal)
     : undefined
+  // 语言要等标题读出来才定：这一轮没有用户手打的消息时用它兜底。
+  const language = resolveLanguage(options.language, messages, title)
   return renderPointer({
     previousId: String(previous.header.id),
     createdAt: previous.header.createdAt,
     title,
     handoff,
     continuity,
-    language: options.language,
+    language,
     maxTitleChars: options.maxTitleChars,
   })
 }

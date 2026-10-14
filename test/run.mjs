@@ -484,6 +484,21 @@ test('有交接文档时既不用摘要也不带结尾', async () => {
   assert.doesNotMatch(text, /不该出现/)
 })
 
+test('这一轮没有用户手打消息时，用上个会话标题兜底语言', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], { 'session-abcdef12-3456': '重构插件索引' })
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    // 子代理的任务消息来源不是 `user`，所以语言检测只能靠标题。
+    decision: {
+      kind: 'enter',
+      messages: [{ role: 'user', source: { kind: 'subagent' }, content: [{ type: 'text', text: 'reply ok' }] }],
+    },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /你上一个会话是/, '标题是中文，就该用中文')
+})
+
 test('标题缺失时退回会话 id', async () => {
   const { ctx, handlers } = makeContext([selfRecord, previousRecord])
   apply(ctx, {})

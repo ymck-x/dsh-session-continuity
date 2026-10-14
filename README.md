@@ -94,7 +94,7 @@ dsh plugin --profile <profile> add dsh-session-continuity
 固定版本：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.3.0.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.3.1.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -106,7 +106,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.3.0
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.3.1
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -115,6 +115,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.3.1` | 修：这一轮没有「用户手打」的消息时（例如子代理），语言判断改用上个会话的标题兜底，不再退回英文 |
 | `v0.3.0` | 没有交接文档时，优先复用上一个会话的压缩摘要（DSH 已生成，零成本），比原来自动写一份更划算 |
 | `v0.2.3` | 语言默认改为跟随用户（`auto`）；指针开头加「与当前请求无关就忽略」；中文角色称呼改为「用户／助手」 |
 | `v0.2.2` | 仅文档：安装章节补上「从 npm 安装」 |
@@ -202,7 +203,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-**逻辑级**：`node test/run.mjs`，29 项通过——覆盖同工作目录优先、全局回退、有无交接文档、复用压缩摘要（挑小节、受预算约束）、退回最后两句、只认真实用户输入、语言跟随（auto/显式 en/显式 zh）、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退、交接文档路径写法、代码围栏压平。
+**逻辑级**：`node test/run.mjs`，30 项通过——覆盖同工作目录优先、全局回退、有无交接文档、复用压缩摘要（挑小节、受预算约束）、退回最后两句、只认真实用户输入、语言跟随（auto/显式 en/显式 zh/标题兜底）、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退、交接文档路径写法、代码围栏压平。
 
 **发布后收到的第一个真实差评，以及它改了什么**：用户开新对话时看到的是英文指针（`Continuity: previous session … Tail — user: …`）——默认 `language: en`，而他用中文，直接看不懂；紧接着模型又把这段注入当成回答素材，回了一串会话编号式的话。两处都改了：语言默认改为 `auto` 跟随用户，指针开头写明「与当前请求无关就忽略」，中文里的角色称呼也从「你／它」改成「用户／助手」（原来的写法会让模型分不清是谁说的）。
 

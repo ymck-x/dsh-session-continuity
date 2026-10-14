@@ -1,7 +1,7 @@
 {
   "name": "dsh-session-continuity",
-  "version": "0.3.0",
-  "description": "新会话开始时注入一条很小的接续指针，指向上一个会话与工作区交接文档；没有文档时补上那个会话的最后两句。",
+  "version": "0.3.1",
+  "description": "新会话开始时注入一条很小的接续指针；没有交接文档时优先复用上个会话的压缩摘要。",
   "type": "module",
   "main": "index.js",
   "exports": {
