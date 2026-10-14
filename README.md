@@ -2,34 +2,32 @@
 
 新会话开始时，注入一条很小的**接续指针**：上一个会话是谁、工作区里有没有交接文档。
 
-它不搬运会话原文，也不调用模型生成摘要。唯一的例外：工作区里**没有**交接文档时，它会补上那个会话的最后两句（你最后说的、它最后回的），并受字节预算硬约束——这样你不用养成写文档的习惯也能接上话。其余情况需要背景时，由模型自己去读那份文件。
+两件事值得先说清楚：
+
+- **语言默认跟随你**（`language: auto`）。你用中文提问，指针就是中文；用英文提问就是英文。发布后收到的第一个真实差评就是「默认英文，中文用户看不懂」——所以这个默认值是这么来的。
+- 指针开头写着「**与当前请求无关就忽略**」。它在语义上是背景，不是任务；你开新对话做一件全新的事时，模型应该把它放一边。
+
+它不搬运会话原文，也不调用模型生成摘要。唯一的例外：工作区里**没有**交接文档时，它会补上那个会话的最后两句，并受字节预算硬约束——这样你不用养成写文档的习惯也能接上话。
 
 ## 注入什么
 
-工作区里有交接文档时（英文，默认）：
+工作区里有交接文档时（英文）：
 
 ```
-Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, id 1f759b89). Read HANDOFF.md (2026-10-13) before planning.
+[background — ignore if unrelated] Your previous session in this workspace was "给 DSH 写一个会话接续插件" (2026-10-13, id 1f759b89). If this really continues it, read HANDOFF.md (2026-10-14) before planning.
 ```
 
-中文（`language: zh`）：
+中文（中文提问时的实际输出）：
 
 ```
-会话接续：上个会话「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。动手前先读 HANDOFF.md（2026-10-13）。
+（背景，与当前请求无关就忽略）这个工作区里，你上一个会话是「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。如果确实接着它做，动手前先读 HANDOFF.md（2026-10-14）。
 ```
 
-没有交接文档时，补上最后两句：
+没有交接文档时，补上那个会话的最后两句：
 
 ```
-Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, id 1f759b89). No handoff file; @-reference it for the full history.
-Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。"
-```
-
-中文：
-
-```
-会话接续：上个会话「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。它没留下交接文档；要完整历史请用 @ 引用它。
-结尾 —— 你最后说：「把导出按钮改成能选 CSV 和 XLSX」；它最后回：「CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。」
+（背景，与当前请求无关就忽略）这个工作区里，你上一个会话是「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。它没留下交接文档；需要完整历史请让用户用 @ 引用它。
+那个会话的结尾 —— 用户最后说：「把导出按钮改成能选 CSV 和 XLSX」；助手最后回：「CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。」
 ```
 
 最后两句也没有（空会话等）就退回纯提醒；想彻底回到「只给指针」，把 `tailBytes` 设成 `0`。
@@ -40,11 +38,9 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 
 | 情形 | 英文 | 中文 |
 |---|---|---|
-| 有交接文档 | 119 字符 / 139 字节 | 80 字符 / 146 字节 |
-| 没交接文档，带最后两句 | 211 字符 / 299 字节 | 148 字符 / 342 字节 |
-| 没交接文档，`tailBytes: 0` | 146 字符 / 166 字节 | — |
-
-真机实测（会话日志里的原文，样本不同所以数字不同）：有交接文档 147 字节；中文 + 带结尾 559 字节。**上限**是「头部约 160 字节 + `tailBytes`（默认 500）+ 包装约 60 字节」，最坏约 720 字节——预算约束的是两条原文各自的大小，不约束整条消息。
+| 有交接文档 | 198 字符 / 220 字节 | 109 字符 / 233 字节 |
+| 没交接文档，带最后两句 | 283 字符 / 373 字节 | 179 字符 / 435 字节 |
+| 没交接文档，`tailBytes: 0` | 196 字符 / 218 字节 | — |
 
 ## 为什么不是「引用上一个会话」
 
@@ -52,8 +48,8 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 |---|---|
 | `@` 引用上一个会话（DSH 内建的会话引用快照） | 每源上限 `max(65536, 上下文窗口 × 4 × 0.2)` 字节；在 100 万 token 窗口下上限约 80 万字节 ≈ **20 万 token** |
 | 注入上一会话的压缩摘要 | 约 1k ~ 3k token |
-| **本插件：有交接文档时只给指针** | **约 35 token（139 字节），一次** |
-| **本插件：没交接文档时补最后两句** | **约 75 ~ 90 token（299 ~ 342 字节），一次** |
+| **本插件：有交接文档时只给指针** | **约 55 token（220 字节），一次** |
+| **本插件：没交接文档时补最后两句** | **约 95 ~ 110 token（373 ~ 435 字节），一次** |
 
 指针注入一次后留在会话历史里，后续每轮重发时命中前缀缓存；模型真要细节时自己去 `read` 那份交接文档，全文只活在那一个会话里。省 token 的杠杆不是「少带点原文」，而是**把随身携带换成按需拉取**。
 
@@ -67,14 +63,14 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 dsh plugin --profile <profile> add dsh-session-continuity
 ```
 
-锁死版本就写 `dsh-session-continuity@0.2.2`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
+锁死版本就写 `dsh-session-continuity@0.2.3`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
 
 ### 从 GitHub 安装（不想走 npm，或要离线分发时）
 
 固定版本：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.2.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.3.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -86,7 +82,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.2
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.3
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -95,6 +91,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.2.3` | 语言默认改为跟随用户（`auto`）；指针开头加「与当前请求无关就忽略」；中文角色称呼改为「用户／助手」 |
 | `v0.2.2` | 仅文档：安装章节补上「从 npm 安装」 |
 | `v0.2.1` | 修复：引用文本里的代码围栏压平、交接文档路径统一正斜杠（真机验证时发现） |
 | `v0.2.0` | 没交接文档时补上「上个会话的最后两句」（受 `tailBytes` 约束） |
@@ -140,7 +137,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `enabled` | `true` | 设为 `false` 即完全停止注入，不必卸载 |
-| `language` | `en` | 指针文本语言：`en` 或 `zh` |
+| `language` | `auto` | `auto` 跟随这一轮用户消息的语言（有中日韩文字就用中文）；也可以写死 `en` 或 `zh` |
 | `handoffPaths` | `.dsh/handoff.md`、`.dsh/HANDOFF.md`、`HANDOFF.md`、`docs/agents/handoff.md` | 相对工作目录，取第一个存在的 |
 | `maxTitleChars` | `48` | 标题超过就截断，避免超长标题撑大指针 |
 | `tailBytes` | `500` | 没有交接文档时，从上一个会话末尾带过来的字节预算（用户与助手各一半）；`0` 表示只给指针 |
@@ -174,7 +171,9 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-**逻辑级**：`node test/run.mjs`，21 项通过——覆盖同工作目录优先、全局回退、有无交接文档、补最后两句、只认真实用户输入、字节预算截断、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退、交接文档路径写法、代码围栏压平。
+**逻辑级**：`node test/run.mjs`，25 项通过——覆盖同工作目录优先、全局回退、有无交接文档、补最后两句、只认真实用户输入、字节预算截断、语言跟随（auto/显式 en/显式 zh）、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退、交接文档路径写法、代码围栏压平。
+
+**发布后收到的第一个真实差评，以及它改了什么**：用户开新对话时看到的是英文指针（`Continuity: previous session … Tail — user: …`）——默认 `language: en`，而他用中文，直接看不懂；紧接着模型又把这段注入当成回答素材，回了一串会话编号式的话。两处都改了：语言默认改为 `auto` 跟随用户，指针开头写明「与当前请求无关就忽略」，中文里的角色称呼也从「你／它」改成「用户／助手」（原来的写法会让模型分不清是谁说的）。
 
 **真实 DSH 进程里确认到的**（0.2.0-rc.2）：
 

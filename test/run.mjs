@@ -127,7 +127,7 @@ test('工作区没有交接文档时明确说明，而不是编造', async () =>
   assert.doesNotMatch(text, /HANDOFF\.md/)
 })
 
-test('中文模式', async () => {
+test('显式指定 zh 时用中文', async () => {
   const { ctx, handlers } = makeContext([selfRecord, previousRecord], { 'session-abcdef12-3456': '重构插件索引' })
   apply(ctx, { language: 'zh' })
   const decision = await preStep(handlers.get('agent/pre-step'), {
@@ -135,8 +135,58 @@ test('中文模式', async () => {
     decision: { kind: 'enter', messages: [] },
   })
   const text = injected(decision).content[0].text
-  assert.match(text, /会话接续/)
+  assert.match(text, /你上一个会话是/)
   assert.match(text, /HANDOFF\.md/)
+})
+
+/** 造一条这一轮用户自己写的消息。 */
+function humanMessage(text) {
+  return { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }
+}
+
+test('默认跟随用户消息的语言（中文提问得到中文指针）', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord])
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [humanMessage('帮我把导出功能改成能选 CSV')] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /你上一个会话是/)
+  assert.doesNotMatch(text, /previous session/)
+})
+
+test('默认跟随用户消息的语言（英文提问得到英文指针）', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord])
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [humanMessage('make the export support CSV')] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /previous session/)
+})
+
+test('显式 en 不会被中文消息改掉', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord])
+  apply(ctx, { language: 'en' })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [humanMessage('帮我把导出功能改成能选 CSV')] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /previous session/)
+})
+
+test('指针带上「无关就忽略」的提示', async () => {
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord])
+  apply(ctx, { language: 'zh' })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /与当前请求无关就忽略/)
 })
 
 test('没有其他会话就不注入', async () => {

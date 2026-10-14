@@ -41,7 +41,7 @@ const DEFAULT_TAIL_BYTES = 500
 export const Config = z.object({
   /** 关掉它即可完全停止注入，不必卸载插件。 */
   enabled: z.boolean(),
-  /** 注入文本的语言：`en` 或 `zh`。 */
+  /** 注入文本的语言：`auto`（跟随这一轮用户消息）、`en` 或 `zh`。 */
   language: z.string(),
   /** 相对工作目录的交接文档候选路径，取第一个存在的。 */
   handoffPaths: z.array(z.string()),
@@ -52,6 +52,29 @@ export const Config = z.object({
 })
 
 /**
+ * 注入文本用哪种语言。
+ *
+ * 默认 `auto`：看这一轮用户自己写的话里有没有中日韩文字。用户用中文提问，
+ * 却收到一段英文的会话背景，是发布后收到的第一个真实差评——所以这个默认值是本意。
+ *
+ * @param configured - 配置里的 `language`；显式给 `en`/`zh` 时直接采纳。
+ * @param messages - 这一步拟进入的消息批次。
+ * @returns `'en'` 或 `'zh'`。
+ */
+function resolveLanguage(configured, messages) {
+  if (configured === 'zh' || configured === 'en') return configured
+  for (const message of messages) {
+    if (message?.role !== 'user') continue
+    if (message?.source?.kind !== 'user') continue
+    const text = blockText(message.content)
+    if (text === undefined) continue
+    if (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(text)) return 'zh'
+    return 'en'
+  }
+  return 'en'
+}
+
+/**
  * 注册前置的 pre-step 监听器。
  * @param ctx - 插件上下文，监听器随它释放。
  * @param config - 见 {@link Config}；缺字段时使用默认值。
@@ -59,7 +82,7 @@ export const Config = z.object({
 export function apply(ctx, config) {
   if ((config?.enabled ?? true) === false) return
   const options = {
-    language: config?.language === 'zh' ? 'zh' : 'en',
+    language: config?.language === 'zh' || config?.language === 'en' ? config.language : 'auto',
     handoffPaths: Array.isArray(config?.handoffPaths) && config.handoffPaths.length > 0
       ? config.handoffPaths
       : DEFAULT_HANDOFF_PATHS,
@@ -80,7 +103,9 @@ export function apply(ctx, config) {
 
     let text
     try {
-      text = await buildPointer(ctx, agent, options, signal)
+      // 语言跟随这一轮用户自己写的话，而不是配置里的固定值。
+      const language = resolveLanguage(options.language, decision.messages)
+      text = await buildPointer(ctx, agent, { ...options, language }, signal)
     } catch (error) {
       ctx.logger?.warn?.(`session-continuity: ${error instanceof Error ? error.message : String(error)}`)
       return decision
@@ -289,22 +314,23 @@ function renderPointer({ previousId, createdAt, title, handoff, tail, language, 
   const shortId = shortSessionId(previousId)
   const created = formatDate(createdAt)
   const head = language === 'zh'
-    ? `会话接续：上个会话「${label}」（${created}，id ${shortId}）`
-    : `Continuity: previous session "${label}" (${created}, id ${shortId})`
+    ? `（背景，与当前请求无关就忽略）这个工作区里，你上一个会话是「${label}」（${created}，id ${shortId}）`
+    : `[background — ignore if unrelated] Your previous session in this workspace was "${label}" (${created}, id ${shortId})`
 
   if (handoff !== undefined) {
     const updated = formatDate(handoff.mtimeMs)
     return language === 'zh'
-      ? `${head}。动手前先读 ${handoff.display}（${updated}）。`
-      : `${head}. Read ${handoff.display} (${updated}) before planning.`
+      ? `${head}。如果确实接着它做，动手前先读 ${handoff.display}（${updated}）。`
+      : `${head}. If this really continues it, read ${handoff.display} (${updated}) before planning.`
   }
 
   const parts = []
   if (tail?.user !== undefined) {
-    parts.push(language === 'zh' ? `你最后说：「${tail.user}」` : `user: "${tail.user}"`)
+    // 用「用户／助手」而不是「你／它」：中文里的「你」会让模型分不清是谁说的话。
+    parts.push(language === 'zh' ? `用户最后说：「${tail.user}」` : `user: "${tail.user}"`)
   }
   if (tail?.assistant !== undefined) {
-    parts.push(language === 'zh' ? `它最后回：「${tail.assistant}」` : `assistant: "${tail.assistant}"`)
+    parts.push(language === 'zh' ? `助手最后回：「${tail.assistant}」` : `assistant: "${tail.assistant}"`)
   }
   if (parts.length === 0) {
     return language === 'zh'
@@ -312,8 +338,8 @@ function renderPointer({ previousId, createdAt, title, handoff, tail, language, 
       : `${head}. No handoff file; ask the user to @-reference it if you need its history.`
   }
   return language === 'zh'
-    ? `${head}。它没留下交接文档；要完整历史请用 @ 引用它。\n结尾 —— ${parts.join('；')}`
-    : `${head}. No handoff file; @-reference it for the full history.\nTail — ${parts.join(' | ')}`
+    ? `${head}。它没留下交接文档；需要完整历史请让用户用 @ 引用它。\n那个会话的结尾 —— ${parts.join('；')}`
+    : `${head}. No handoff file; ask the user to @-reference it for the full history.\nTail of it — ${parts.join(' | ')}`
 }
 
 /** 取会话 id 里真正有区分度的那一段：`session-` 前缀不携带信息。 */
