@@ -68,6 +68,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.1.2` | 仅文档：补上端到端验证结论（重启后注入成功，附会话日志证据） |
 | `v0.1.1` | 补 `peerDependenciesMeta.optional`（消除 pnpm 的 peer 警告）与仓库元数据 |
 | `v0.1.0` | 首个可安装版本 |
 
@@ -134,7 +135,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 - 模型自己不能 `@` 引用会话（那是输入框给用户的能力），所以没有交接文档时，指针只能提醒用户去引用。
 - 排序键是**会话创建时间**，不是最后活动时间：一个昨天创建、今天还在用的长会话，会排在一个今天新建的短会话后面。
 - 没有交接文档时，指针只剩标题和时间，价值有限。
-- 未覆盖的场景：多 profile 并行、跨重启后的首次注入、受限沙箱下工作区文件的可见性。
+- 未覆盖的场景：多 profile 并行、受限沙箱下工作区文件的可见性。（跨重启后的首次注入已验证：重启 DSH 后新开一个子会话，注入当次生效。）
 
 ## 验证状态
 
@@ -151,7 +152,15 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 1. `Config` 里用 schemastery 的链式 `.default(...)` 会让配置校验失败，插件**静默不激活**——`apply` 根本不被调用，日志里什么都不写。改成纯类型声明、默认值放到 `apply` 里用 `??` 兜底就好了。这个坑只有装进真实 profile 才暴露得出来。
 2. 本地测试会在仓库根建 `node_modules` 桩包。**如果这时 DSH 以 `link:` 方式装了这个目录，插件会解析到桩而不是真包**——桩的 `createUserMessage` 和 schemastery 与真实现不同，验证结论全部作废。现在 `test/run.mjs` 与 `test/sample.mjs` 结束时都会自动删掉桩（要保留就设 `DSH_CONTINUITY_KEEP_STUBS=1`）；装进 profile 之前也请确认这个目录不存在。
 
-**没有验证到最后一步**：没能观测到「注入的消息真的进入那一步的消息批次」。原因是本机 Desktop 的运行进程在安装组合包后不会重新发布运行时组合（要重启 DSH 才生效），而重启会打断正在进行的会话；改用一次性 CLI 会话时它能加载并激活插件，却卡在模型调用阶段、走不到 `pre-step`。要彻底闭环：重启一次 DSH，开个新会话，看那一轮里有没有 `Continuity: ...` 的注入行。
+**注入真的发生了（端到端闭环）**：重启 DSH 之后，一个全新子会话的日志里留下了这条记录——会话文件 `session.v4.jsonl.zstd` 里的 `user/message` 事件，来源 `kind: session-continuity`：
+
+```json
+{"type":"user/message","seq":13,"data":{"content":[{"type":"text","text":"Continuity: previous session \"…\" (2026-10-13, id e5545680). No handoff file; ask the user to @-reference it if you need its history."}],"source":{"kind":"session-continuity","form":"snapshot","sections":[{"name":"session-continuity","text":"…"}]},"role":"user","id":"987a9f60-…"}}
+```
+
+也就是说：它选对了同工作目录的上一个会话、把 `session-` 前缀剥掉只留 8 位 id、标题按 48 字符截断、没有交接文档时正确降级，并且那个会话里**只注入这一条**（139 字节）。
+
+**一个反直觉的观察**：同一轮里直接问模型「你上下文里有没有以 `Continuity:` 开头的 user 消息」，它会答「没有」——DSH 把这类消息作为**上下文注入**与用户输入区分开，模型不把它当用户消息。所以判断插件是否生效，**看会话日志，不要问模型**。
 
 ## 开发
 
