@@ -1,9 +1,12 @@
 /**
  * dsh-session-continuity — 新会话开始时的「极小接续指针」。
  *
- * 目的只有一个：省 token。新会话的第一个模型步骤里，本插件只注入一条极短的
- * 用户角色消息，告诉模型「上一个会话是哪个、工作区里有没有交接文档」。
- * 它绝不搬运会话原文、也不生成摘要——需要背景时由模型自己去读那份文件。
+ * 目的只有一个：省 token。新会话的第一个模型步骤里，本插件注入一条很短的用户角色
+ * 消息，告诉模型「上一个会话是哪个、工作区里有没有交接文档」。
+ *
+ * 工作区里**没有**交接文档时，它会额外补上那个会话的最后两句（用户最后说的、助手
+ * 最后回的），并受字节预算硬约束——这是唯一会带上会话内容的情形。其余情况一律
+ * 只给指针：需要背景时由模型自己去读那份文件。
  *
  * 注入缝：`agent/pre-step`（瀑布式事件），与 DSH 自带的 dsh-time-context、
  * dsh-tmux-context、dsh-agent-instructions 用的是同一处。
@@ -32,6 +35,9 @@ const DEFAULT_HANDOFF_PATHS = [
 
 const MAX_TITLE_CHARS = 48
 
+/** 没有交接文档时，从上一个会话末尾带过来的字节预算。 */
+const DEFAULT_TAIL_BYTES = 500
+
 export const Config = z.object({
   /** 关掉它即可完全停止注入，不必卸载插件。 */
   enabled: z.boolean(),
@@ -41,6 +47,8 @@ export const Config = z.object({
   handoffPaths: z.array(z.string()),
   /** 会话标题在指针里的最大字符数，超出即截断。 */
   maxTitleChars: z.number(),
+  /** 没有交接文档时，从上一个会话末尾带过来的字节预算；`0` 表示只给指针。 */
+  tailBytes: z.number(),
 })
 
 /**
@@ -58,6 +66,9 @@ export function apply(ctx, config) {
     maxTitleChars: Number.isSafeInteger(config?.maxTitleChars) && config.maxTitleChars > 0
       ? config.maxTitleChars
       : MAX_TITLE_CHARS,
+    tailBytes: Number.isSafeInteger(config?.tailBytes) && config.tailBytes >= 0
+      ? config.tailBytes
+      : DEFAULT_TAIL_BYTES,
   }
 
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next) => {
@@ -115,14 +126,100 @@ async function buildPointer(ctx, agent, options, signal) {
 
   const title = await readTitle(ctx, previous, signal)
   const handoff = findHandoff(cwd, options.handoffPaths)
+  // 没有交接文档才补最后两句：有文档时指针指向文档，不需要再带内容。
+  const tail = handoff === undefined
+    ? await readTail(ctx, previous.header.id, options.tailBytes, signal)
+    : undefined
   return renderPointer({
     previousId: String(previous.header.id),
     createdAt: previous.header.createdAt,
     title,
     handoff,
+    tail,
     language: options.language,
     maxTitleChars: options.maxTitleChars,
   })
+}
+
+/**
+ * 读上一个会话的「结尾」：用户最后说的原话，和助手最后回的话。
+ *
+ * 只认来源为真实用户的 `user/message`（`source.kind === 'user'`），
+ * 这样既不会把别的插件注入的上下文当成用户的话，也不会让本插件递归引用自己。
+ * 读取失败一律当作没有——绝不因为补一段结尾而拖住这一轮。
+ *
+ * @returns `{ user, assistant }`，两者都可能缺省；都没有时返回 `undefined`。
+ */
+async function readTail(ctx, sessionId, budgetBytes, signal) {
+  if (!Number.isSafeInteger(budgetBytes) || budgetBytes <= 0) return undefined
+  const query = ctx.sessionQuery
+  if (typeof query?.readSurface !== 'function') return undefined
+
+  let surface
+  try {
+    surface = await query.readSurface(sessionId)
+  } catch {
+    return undefined
+  }
+  if (signal?.aborted === true) return undefined
+
+  const events = Array.isArray(surface?.events) ? surface.events : []
+  const lastUser = lastMessageText(events, 'user/message', true)
+  const lastAssistant = lastMessageText(events, 'assistant/message', false)
+  if (lastUser === undefined && lastAssistant === undefined) return undefined
+
+  const perMessage = Math.max(80, Math.floor(budgetBytes / 2))
+  return {
+    user: lastUser === undefined ? undefined : clipBytes(lastUser, perMessage),
+    assistant: lastAssistant === undefined ? undefined : clipBytes(lastAssistant, perMessage),
+  }
+}
+
+/**
+ * 从表层事件里倒着找某类消息的文本。
+ * @param events - `sessionQuery.readSurface()` 返回的表层事件。
+ * @param type - 事件类型，例如 `user/message`。
+ * @param humanOnly - 为真时只接受真实用户输入（排除插件注入的上下文）。
+ */
+function lastMessageText(events, type, humanOnly) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type !== type) continue
+    const message = event.data?.message ?? event.data
+    if (humanOnly && message?.source?.kind !== 'user') continue
+    const text = blockText(message?.content)
+    if (text !== undefined) return text
+  }
+  return undefined
+}
+
+/** 把一条消息的内容块拼成纯文本；没有文本块时返回 `undefined`。 */
+function blockText(content) {
+  if (!Array.isArray(content)) return undefined
+  const parts = []
+  for (const block of content) {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+      parts.push(block.text)
+    }
+  }
+  return parts.length === 0 ? undefined : parts.join('\n')
+}
+
+/** 按 UTF-8 字节数截断，不切断多字节字符。 */
+function clipBytes(value, maxBytes) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  if (text === '') return undefined
+  const encoder = new TextEncoder()
+  if (encoder.encode(text).length <= maxBytes) return text
+  let clipped = ''
+  let used = 0
+  for (const char of text) {
+    const size = encoder.encode(char).length
+    if (used + size > maxBytes) break
+    clipped += char
+    used += size
+  }
+  return clipped === '' ? undefined : `${clipped}…`
 }
 
 /**
@@ -175,8 +272,8 @@ function findHandoff(cwd, handoffPaths) {
   return undefined
 }
 
-/** 渲染指针文本。只有标题、时间、id 和一个文件路径——没有会话内容。 */
-function renderPointer({ previousId, createdAt, title, handoff, language, maxTitleChars }) {
+/** 渲染指针文本：标题、时间、id，加一个文件路径或那个会话的最后两句。 */
+function renderPointer({ previousId, createdAt, title, handoff, tail, language, maxTitleChars }) {
   const label = clip(title ?? previousId, maxTitleChars)
   const shortId = shortSessionId(previousId)
   const created = formatDate(createdAt)
@@ -190,9 +287,22 @@ function renderPointer({ previousId, createdAt, title, handoff, language, maxTit
       ? `${head}。动手前先读 ${handoff.display}（${updated}）。`
       : `${head}. Read ${handoff.display} (${updated}) before planning.`
   }
+
+  const parts = []
+  if (tail?.user !== undefined) {
+    parts.push(language === 'zh' ? `你最后说：「${tail.user}」` : `user: "${tail.user}"`)
+  }
+  if (tail?.assistant !== undefined) {
+    parts.push(language === 'zh' ? `它最后回：「${tail.assistant}」` : `assistant: "${tail.assistant}"`)
+  }
+  if (parts.length === 0) {
+    return language === 'zh'
+      ? `${head}。它没留下交接文档；需要完整历史时请让用户用 @ 引用它。`
+      : `${head}. No handoff file; ask the user to @-reference it if you need its history.`
+  }
   return language === 'zh'
-    ? `${head}。它没留下交接文档；需要完整历史时请让用户用 @ 引用它。`
-    : `${head}. No handoff file; ask the user to @-reference it if you need its history.`
+    ? `${head}。它没留下交接文档；要完整历史请用 @ 引用它。\n结尾 —— ${parts.join('；')}`
+    : `${head}. No handoff file; @-reference it for the full history.\nTail — ${parts.join(' | ')}`
 }
 
 /** 取会话 id 里真正有区分度的那一段：`session-` 前缀不携带信息。 */

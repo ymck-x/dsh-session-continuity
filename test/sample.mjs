@@ -43,14 +43,36 @@ function makeContext(cwd, records) {
         async readTitleSnapshot(id) {
           return titles[id] === undefined ? { session: { id } } : { session: { id }, title: titles[id] }
         },
+        async readSurface(id) {
+          return { session: { id }, capturedThroughSeq: null, events: surface }
+        },
       },
     },
   }
 }
 
-async function sample({ language, cwd, records, label }) {
+/** 上一个会话结尾的样子。 */
+const surface = [
+  {
+    type: 'user/message',
+    data: { role: 'user', content: [{ type: 'text', text: '把导出按钮改成能选 CSV 和 XLSX' }], source: { kind: 'user' } },
+  },
+  {
+    type: 'assistant/message',
+    data: {
+      turn: 1,
+      step: 1,
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。' }],
+      },
+    },
+  },
+]
+
+async function sample({ language, cwd, records, label, tailBytes }) {
   const { ctx, handlers } = makeContext(cwd, records)
-  apply(ctx, { language })
+  apply(ctx, { language, tailBytes })
   const decision = await handlers.get('agent/pre-step')(
     { agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd } } }, turn: 1, step: 1, signal: undefined },
     async () => ({ kind: 'enter', messages: [] }),
@@ -65,7 +87,9 @@ async function sample({ language, cwd, records, label }) {
 
 await sample({ language: 'en', cwd: workspace, records: [selfRecord, previousRecord], label: '英文 · 有交接文档' })
 await sample({ language: 'zh', cwd: workspace, records: [selfRecord, previousRecord], label: '中文 · 有交接文档' })
-await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], label: '英文 · 无交接文档' })
+await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], label: '英文 · 没交接文档（带结尾两句）' })
+await sample({ language: 'zh', cwd: bare, records: [selfRecord, previousRecord], label: '中文 · 没交接文档（带结尾两句）' })
+await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], tailBytes: 0, label: '英文 · 没交接文档且 tailBytes=0' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord], label: '工作区里没有上一个会话' })
 
 cleanupStubs()

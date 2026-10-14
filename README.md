@@ -1,8 +1,8 @@
 # dsh-session-continuity
 
-新会话开始时，只注入一条极小的**接续指针**：上一个会话是谁、工作区里有没有交接文档。
+新会话开始时，注入一条很小的**接续指针**：上一个会话是谁、工作区里有没有交接文档。
 
-它不搬运任何会话原文，也不调用模型生成摘要——需要背景时由模型自己去读那份文件。
+它不搬运会话原文，也不调用模型生成摘要。唯一的例外：工作区里**没有**交接文档时，它会补上那个会话的最后两句（你最后说的、它最后回的），并受字节预算硬约束——这样你不用养成写文档的习惯也能接上话。其余情况需要背景时，由模型自己去读那份文件。
 
 ## 注入什么
 
@@ -18,15 +18,31 @@ Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, 
 会话接续：上个会话「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。动手前先读 HANDOFF.md（2026-10-13）。
 ```
 
-没有交接文档时退化为：
+没有交接文档时，补上最后两句：
 
 ```
-Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, id 1f759b89). No handoff file; ask the user to @-reference it if you need its history.
+Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, id 1f759b89). No handoff file; @-reference it for the full history.
+Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。"
 ```
+
+中文：
+
+```
+会话接续：上个会话「给 DSH 写一个会话接续插件」（2026-10-13，id 1f759b89）。它没留下交接文档；要完整历史请用 @ 引用它。
+结尾 —— 你最后说：「把导出按钮改成能选 CSV 和 XLSX」；它最后回：「CSV 已经好了，XLSX 还差一个表头映射，卡在合并单元格上。」
+```
+
+最后两句也没有（空会话等）就退回纯提醒；想彻底回到「只给指针」，把 `tailBytes` 设成 `0`。
 
 工作区里没有其他会话时**什么都不注入**。
 
-实测体积（`node test/sample.mjs` 的输出）：英文 119 字符 / 139 字节，中文 80 字符 / 146 字节，只注入一次。
+实测体积（`node test/sample.mjs` 的输出，只注入一次）：
+
+| 情形 | 英文 | 中文 |
+|---|---|---|
+| 有交接文档 | 119 字符 / 139 字节 | 80 字符 / 146 字节 |
+| 没交接文档，带最后两句 | 211 字符 / 299 字节 | 148 字符 / 342 字节 |
+| 没交接文档，`tailBytes: 0` | 146 字符 / 166 字节 | — |
 
 ## 为什么不是「引用上一个会话」
 
@@ -34,7 +50,8 @@ Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, 
 |---|---|
 | `@` 引用上一个会话（DSH 内建的会话引用快照） | 每源上限 `max(65536, 上下文窗口 × 4 × 0.2)` 字节；在 100 万 token 窗口下上限约 80 万字节 ≈ **20 万 token** |
 | 注入上一会话的压缩摘要 | 约 1k ~ 3k token |
-| **本插件的指针** | **约 30 ~ 90 token，一次** |
+| **本插件：有交接文档时只给指针** | **约 35 token（139 字节），一次** |
+| **本插件：没交接文档时补最后两句** | **约 75 ~ 90 token（299 ~ 342 字节），一次** |
 
 指针注入一次后留在会话历史里，后续每轮重发时命中前缀缓存；模型真要细节时自己去 `read` 那份交接文档，全文只活在那一个会话里。省 token 的杠杆不是「少带点原文」，而是**把随身携带换成按需拉取**。
 
@@ -47,7 +64,7 @@ Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, 
 固定版本，推荐：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.1.3.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -59,7 +76,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.1.3
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.0
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -68,6 +85,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.2.0` | 没交接文档时补上「上个会话的最后两句」（受 `tailBytes` 约束） |
 | `v0.1.3` | 修复：子代理会话不再被当成「上一个会话」（端到端验证时发现） |
 | `v0.1.2` | 仅文档：补上端到端验证结论（重启后注入成功，附会话日志证据） |
 | `v0.1.1` | 补 `peerDependenciesMeta.optional`（消除 pnpm 的 peer 警告）与仓库元数据 |
@@ -113,6 +131,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 | `language` | `en` | 指针文本语言：`en` 或 `zh` |
 | `handoffPaths` | `.dsh/handoff.md`、`.dsh/HANDOFF.md`、`HANDOFF.md`、`docs/agents/handoff.md` | 相对工作目录，取第一个存在的 |
 | `maxTitleChars` | `48` | 标题超过就截断，避免超长标题撑大指针 |
+| `tailBytes` | `500` | 没有交接文档时，从上一个会话末尾带过来的字节预算（用户与助手各一半）；`0` 表示只给指针 |
 
 ## 配套：让指针有东西可指
 
@@ -131,6 +150,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 - 标题优先从投影缓存读（不读会话日志），缓存给不出时才折叠那个会话的日志。两者都是本地 IO，不花 token。
 - 任何失败（会话查询服务不可用、文件读不到、标题读不出）都只是**不注入**，原样放行这一轮，不影响正常对话。
 - 注入的消息带来源 `kind: 'session-continuity'`，在会话记录里可识别、可回放，不会被当作用户手打的输入。
+- 补最后两句时，只认来源为真实用户的 `user/message`（`source.kind === 'user'`）：既不会把别的插件注入的上下文（时间读数、技能目录、上一次的接续指针）当成用户的话，也不会让本插件递归引用自己。读取失败一律当作没有——绝不因为要补一段结尾而拖住这一轮。
 
 ## 已知限制
 
@@ -141,7 +161,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-**逻辑级**：`node test/run.mjs`，14 项通过——覆盖同工作目录优先、全局回退、有无交接文档、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退。
+**逻辑级**：`node test/run.mjs`，19 项通过——覆盖同工作目录优先、全局回退、有无交接文档、补最后两句、只认真实用户输入、字节预算截断、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退。
 
 **真实 DSH 进程里确认到的**（0.2.0-rc.2）：
 

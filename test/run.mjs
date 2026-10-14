@@ -27,7 +27,7 @@ const previousRecord = { header: { id: 'session-abcdef12-3456', cwd: workspace, 
 const otherRecord = { header: { id: 'session-other-9999', cwd: otherWorkspace, createdAt: Date.UTC(2026, 9, 11) } }
 
 /** 建一个只实现插件用到的那些面的假上下文。 */
-function makeContext(records, titles = {}) {
+function makeContext(records, titles = {}, surfaceEvents = []) {
   const handlers = new Map()
   return {
     handlers,
@@ -46,6 +46,9 @@ function makeContext(records, titles = {}) {
         },
         async readTitleSnapshot(id) {
           return titles[id] === undefined ? { session: { id } } : { session: { id }, title: titles[id] }
+        },
+        async readSurface(id) {
+          return { session: { id }, capturedThroughSeq: null, events: surfaceEvents }
         },
       },
     },
@@ -216,6 +219,98 @@ test('工作区里只有子代理会话时退回到它', async () => {
   })
   const text = injected(decision).content[0].text
   assert.match(text, /一次工具调用/)
+})
+
+/** 造一条表层的 user 消息事件。 */
+function userEvent(text, kind = 'user') {
+  return {
+    type: 'user/message',
+    data: { role: 'user', content: [{ type: 'text', text }], source: { kind } },
+  }
+}
+
+/** 造一条表层的 assistant 消息事件。 */
+function assistantEvent(text) {
+  return {
+    type: 'assistant/message',
+    data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text }] } },
+  }
+}
+
+test('没有交接文档时带上个会话的最后两句', async () => {
+  const surface = [
+    userEvent('把导出改成 CSV'),
+    assistantEvent('已改完，测试通过。'),
+    userEvent('再顺手把表头换成中文'),
+    assistantEvent('表头已换成中文，另外加了单位。'),
+  ]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /再顺手把表头换成中文/)
+  assert.match(text, /表头已换成中文/)
+  assert.doesNotMatch(text, /把导出改成 CSV/, '只带最后两句，不带更早的内容')
+})
+
+test('只认真实用户的话，跳过插件注入的上下文', async () => {
+  const surface = [
+    userEvent('真正的用户消息'),
+    assistantEvent('好'),
+    userEvent('Time sampled while preparing turn 1', 'time-context'),
+  ]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /真正的用户消息/)
+  assert.doesNotMatch(text, /Time sampled/)
+})
+
+test('tailBytes 为 0 时只给指针', async () => {
+  const surface = [userEvent('不该出现的内容'), assistantEvent('也不该出现')]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { tailBytes: 0 })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.doesNotMatch(text, /不该出现/)
+  assert.match(text, /no handoff file/i)
+})
+
+test('结尾片段受字节预算约束', async () => {
+  const long = '啊'.repeat(2000)
+  const surface = [userEvent(long), assistantEvent(long)]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { tailBytes: 500 })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  const bytes = Buffer.byteLength(text, 'utf8')
+  assert.ok(bytes < 900, `整条注入必须很小，实际 ${bytes} 字节`)
+})
+
+test('有交接文档时不带结尾片段', async () => {
+  const surface = [userEvent('不该出现'), assistantEvent('也不该出现')]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /HANDOFF\.md/)
+  assert.doesNotMatch(text, /不该出现/)
 })
 
 test('标题缺失时退回会话 id', async () => {
