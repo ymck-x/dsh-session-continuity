@@ -23,7 +23,7 @@ const previousRecord = {
 }
 const titles = { 'session-1f759b89-3603-4ed4-905d-0a6ed4402618': '给 DSH 写一个会话接续插件' }
 
-function makeContext(cwd, records) {
+function makeContext(cwd, records, surfaceEvents = tailSurface) {
   const handlers = new Map()
   return {
     handlers,
@@ -44,7 +44,7 @@ function makeContext(cwd, records) {
           return titles[id] === undefined ? { session: { id } } : { session: { id }, title: titles[id] }
         },
         async readSurface(id) {
-          return { session: { id }, capturedThroughSeq: null, events: surface }
+          return { session: { id }, capturedThroughSeq: null, events: surfaceEvents }
         },
       },
     },
@@ -52,7 +52,7 @@ function makeContext(cwd, records) {
 }
 
 /** 上一个会话结尾的样子。 */
-const surface = [
+const tailSurface = [
   {
     type: 'user/message',
     data: { role: 'user', content: [{ type: 'text', text: '把导出按钮改成能选 CSV 和 XLSX' }], source: { kind: 'user' } },
@@ -70,8 +70,43 @@ const surface = [
   },
 ]
 
-async function sample({ language, cwd, records, label, tailBytes }) {
-  const { ctx, handlers } = makeContext(cwd, records)
+/** 上一个会话被 DSH 自动压缩后留下的摘要。 */
+const summarySurface = [
+  {
+    type: 'user/message',
+    data: {
+      role: 'user',
+      source: { kind: 'compact-checkpoint', compactionId: 'cp-1' },
+      content: [{
+        type: 'text',
+        text: [
+          'This is an automatically generated checkpoint condensing an earlier span of the conversation.',
+          '<compacted-summary>',
+          '## Primary Request and Intent',
+          '- 做一个插件索引站，把 GITHUB 上零散的 DSH 插件汇总起来给用户浏览',
+          '## Key Technical Concepts',
+          '- DSH 插件体系、bundle patch、pnpm 供应链策略',
+          '## Files and Code',
+          '- build_index.py：抓取与去重；out/index.json：产物',
+          '## Errors and Fixes',
+          '- 分页参数在第二页会丢排序，已改成显式游标',
+          '## Current Work',
+          '- 正在写导入器，已能跑通单仓库',
+          '## Next Step',
+          '- 补上分页，然后测一个大仓库',
+          '## Pending Jobs',
+          '- 还没测过超过 500 个插件的仓库',
+          '## Critical Context',
+          '- 用户要求索引必须可核对，不许出现未经核实的版本号',
+          '</compacted-summary>',
+        ].join('\n'),
+      }],
+    },
+  },
+]
+
+async function sample({ language, cwd, records, label, tailBytes, surfaceEvents = tailSurface }) {
+  const { ctx, handlers } = makeContext(cwd, records, surfaceEvents)
   apply(ctx, { language, tailBytes })
   const decision = await handlers.get('agent/pre-step')(
     { agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd } } }, turn: 1, step: 1, signal: undefined },
@@ -89,6 +124,8 @@ await sample({ language: 'en', cwd: workspace, records: [selfRecord, previousRec
 await sample({ language: 'zh', cwd: workspace, records: [selfRecord, previousRecord], label: '中文 · 有交接文档' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], label: '英文 · 没交接文档（带结尾两句）' })
 await sample({ language: 'zh', cwd: bare, records: [selfRecord, previousRecord], label: '中文 · 没交接文档（带结尾两句）' })
+await sample({ language: 'zh', cwd: bare, records: [selfRecord, previousRecord], surfaceEvents: summarySurface, label: '中文 · 没交接文档但有 DSH 压缩摘要' })
+await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], surfaceEvents: summarySurface, label: '英文 · 没交接文档但有 DSH 压缩摘要' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], tailBytes: 0, label: '英文 · 没交接文档且 tailBytes=0' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord], label: '工作区里没有上一个会话' })
 

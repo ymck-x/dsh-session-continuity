@@ -395,6 +395,95 @@ test('引用文本里的代码围栏被压平', async () => {
   assert.match(text, /'''/)
 })
 
+/** 造一条 DSH 自动生成的压缩检查点事件。 */
+function checkpointEvent(summary) {
+  return {
+    type: 'user/message',
+    data: {
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: `This is an automatically generated checkpoint condensing an earlier span.\n<compacted-summary>\n${summary}\n</compacted-summary>`,
+      }],
+      source: { kind: 'compact-checkpoint', compactionId: 'cp-1' },
+    },
+  }
+}
+
+const SAMPLE_SUMMARY = [
+  '## Primary Request and Intent',
+  '- 用户想要一个插件索引站',
+  '',
+  '## Key Technical Concepts',
+  '- DSH 的插件体系',
+  '',
+  '## Current Work',
+  '- 正在写导入器',
+  '',
+  '## Next Step',
+  '- 补上分页',
+  '',
+  '## Pending Jobs',
+  '- 还没测大仓库',
+].join('\n')
+
+test('优先复用上一个会话的压缩摘要（零模型调用）', async () => {
+  const surface = [checkpointEvent(SAMPLE_SUMMARY), userEvent('收工'), assistantEvent('好')]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { language: 'zh' })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /正在写导入器/, '应带上 Current Work')
+  assert.match(text, /补上分页/, '应带上 Next Step')
+  assert.match(text, /还没测大仓库/, '应带上 Pending Jobs')
+  assert.match(text, /插件索引站/, '应带上原始意图')
+  assert.doesNotMatch(text, /compacted-summary/, '不该把内部标签带进去')
+  assert.doesNotMatch(text, /收工/, '有摘要时不用退回最后两句')
+})
+
+test('摘要也受字节预算约束', async () => {
+  const surface = [checkpointEvent(SAMPLE_SUMMARY)]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { language: 'zh', summaryBytes: 120 })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.ok(Buffer.byteLength(text, 'utf8') < 500, `实际 ${Buffer.byteLength(text, 'utf8')} 字节`)
+  assert.match(text, /正在写导入器/, '预算再小也该保住最要紧的那节')
+})
+
+test('summaryBytes 为 0 时退回最后两句', async () => {
+  const surface = [checkpointEvent(SAMPLE_SUMMARY), userEvent('收工'), assistantEvent('好')]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { language: 'zh', summaryBytes: 0 })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: { ...selfRecord.header, cwd: bareWorkspace } } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.doesNotMatch(text, /正在写导入器/)
+  assert.match(text, /收工/)
+})
+
+test('有交接文档时既不用摘要也不带结尾', async () => {
+  const surface = [checkpointEvent(SAMPLE_SUMMARY), userEvent('不该出现'), assistantEvent('也不该出现')]
+  const { ctx, handlers } = makeContext([selfRecord, previousRecord], {}, surface)
+  apply(ctx, { language: 'zh' })
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /HANDOFF\.md/)
+  assert.doesNotMatch(text, /正在写导入器/)
+  assert.doesNotMatch(text, /不该出现/)
+})
+
 test('标题缺失时退回会话 id', async () => {
   const { ctx, handlers } = makeContext([selfRecord, previousRecord])
   apply(ctx, {})

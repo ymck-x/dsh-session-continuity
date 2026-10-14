@@ -38,6 +38,9 @@ const MAX_TITLE_CHARS = 48
 /** 没有交接文档时，从上一个会话末尾带过来的字节预算。 */
 const DEFAULT_TAIL_BYTES = 500
 
+/** 优先复用上一个会话的压缩摘要时，最多带多少字节（摘要由 DSH 生成，不额外花钱）。 */
+const DEFAULT_SUMMARY_BYTES = 1500
+
 export const Config = z.object({
   /** 关掉它即可完全停止注入，不必卸载插件。 */
   enabled: z.boolean(),
@@ -49,6 +52,8 @@ export const Config = z.object({
   maxTitleChars: z.number(),
   /** 没有交接文档时，从上一个会话末尾带过来的字节预算；`0` 表示只给指针。 */
   tailBytes: z.number(),
+  /** 复用上一个会话的压缩摘要时最多带多少字节；`0` 表示不用摘要。 */
+  summaryBytes: z.number(),
 })
 
 /**
@@ -92,6 +97,9 @@ export function apply(ctx, config) {
     tailBytes: Number.isSafeInteger(config?.tailBytes) && config.tailBytes >= 0
       ? config.tailBytes
       : DEFAULT_TAIL_BYTES,
+    summaryBytes: Number.isSafeInteger(config?.summaryBytes) && config.summaryBytes >= 0
+      ? config.summaryBytes
+      : DEFAULT_SUMMARY_BYTES,
   }
 
   ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next) => {
@@ -151,32 +159,34 @@ async function buildPointer(ctx, agent, options, signal) {
 
   const title = await readTitle(ctx, previous, signal)
   const handoff = findHandoff(cwd, options.handoffPaths)
-  // 没有交接文档才补最后两句：有文档时指针指向文档，不需要再带内容。
-  const tail = handoff === undefined
-    ? await readTail(ctx, previous.header.id, options.tailBytes, signal)
+  // 工作区里有交接文档时，指针指向文档就够，不再带内容。
+  const continuity = handoff === undefined
+    ? await readContinuity(ctx, previous.header.id, options, signal)
     : undefined
   return renderPointer({
     previousId: String(previous.header.id),
     createdAt: previous.header.createdAt,
     title,
     handoff,
-    tail,
+    continuity,
     language: options.language,
     maxTitleChars: options.maxTitleChars,
   })
 }
 
 /**
- * 读上一个会话的「结尾」：用户最后说的原话，和助手最后回的话。
+ * 读上一个会话能交给新窗口的「接续材料」。
  *
- * 只认来源为真实用户的 `user/message`（`source.kind === 'user'`），
- * 这样既不会把别的插件注入的上下文当成用户的话，也不会让本插件递归引用自己。
- * 读取失败一律当作没有——绝不因为补一段结尾而拖住这一轮。
+ * 优先用它自己的压缩摘要：会话长到要换窗口时，DSH 通常已经把它压缩过，
+ * 那条检查点就是一份现成的交接文档（意图、进展、下一步、踩过的坑），
+ * 搬过来不花一次模型调用——这是所有方案里最划算的。
  *
- * @returns `{ user, assistant }`，两者都可能缺省；都没有时返回 `undefined`。
+ * 没有摘要（会话还短）时退回最后两句。读取失败一律当作没有——
+ * 绝不因为要带点背景而拖住这一轮。
+ *
+ * @returns `{ kind: 'summary', text }` 或 `{ kind: 'tail', user, assistant }`。
  */
-async function readTail(ctx, sessionId, budgetBytes, signal) {
-  if (!Number.isSafeInteger(budgetBytes) || budgetBytes <= 0) return undefined
+async function readContinuity(ctx, sessionId, options, signal) {
   const query = ctx.sessionQuery
   if (typeof query?.readSurface !== 'function') return undefined
 
@@ -187,17 +197,100 @@ async function readTail(ctx, sessionId, budgetBytes, signal) {
     return undefined
   }
   if (signal?.aborted === true) return undefined
-
   const events = Array.isArray(surface?.events) ? surface.events : []
+
+  if (Number.isSafeInteger(options.summaryBytes) && options.summaryBytes > 0) {
+    const checkpoint = lastCheckpointText(events)
+    if (checkpoint !== undefined) {
+      const digest = digestCheckpoint(checkpoint, options.summaryBytes)
+      if (digest !== undefined) return { kind: 'summary', text: sanitizeQuoted(digest) }
+    }
+  }
+
+  if (!Number.isSafeInteger(options.tailBytes) || options.tailBytes <= 0) return undefined
   const lastUser = lastMessageText(events, 'user/message', true)
   const lastAssistant = lastMessageText(events, 'assistant/message', false)
   if (lastUser === undefined && lastAssistant === undefined) return undefined
 
-  const perMessage = Math.max(80, Math.floor(budgetBytes / 2))
+  const perMessage = Math.max(80, Math.floor(options.tailBytes / 2))
   return {
+    kind: 'tail',
     user: lastUser === undefined ? undefined : clipBytes(sanitizeQuoted(lastUser), perMessage),
     assistant: lastAssistant === undefined ? undefined : clipBytes(sanitizeQuoted(lastAssistant), perMessage),
   }
+}
+
+/** 找表层里最后一条压缩检查点（DSH 自动摘要）。 */
+function lastCheckpointText(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type !== 'user/message') continue
+    const message = event.data?.message ?? event.data
+    if (message?.source?.kind !== 'compact-checkpoint') continue
+    const text = blockText(message?.content)
+    if (text !== undefined) return text
+  }
+  return undefined
+}
+
+/** 摘要里最值得带回新窗口的小节，按重要性排序。 */
+const SUMMARY_SECTIONS = [
+  '## Current Work',
+  '## Next Step',
+  '## Pending Jobs',
+  '## Primary Request and Intent',
+  '## Critical Context',
+]
+
+/**
+ * 把一份压缩摘要压进字节预算：先挑关键小节，不够再按原顺序补，
+ * 每段内部的代码围栏也会被压平（摘要里常带代码）。
+ */
+function digestCheckpoint(text, budgetBytes) {
+  const inside = /<compacted-summary>([\s\S]*?)<\/compacted-summary>/.exec(text)
+  const body = (inside === null ? text : inside[1]).trim()
+  if (body === '') return undefined
+
+  const sections = []
+  let current = { title: '', lines: [] }
+  for (const line of body.split('\n')) {
+    if (/^##\s/.test(line)) {
+      if (current.title !== '' || current.lines.length > 0) sections.push(current)
+      current = { title: line.trim(), lines: [] }
+      continue
+    }
+    current.lines.push(line)
+  }
+  if (current.title !== '' || current.lines.length > 0) sections.push(current)
+
+  const preferred = []
+  for (const wanted of SUMMARY_SECTIONS) {
+    const found = sections.find((section) => section.title.toLowerCase() === wanted.toLowerCase())
+    if (found !== undefined) preferred.push(found)
+  }
+  const rest = sections.filter((section) => !preferred.includes(section))
+  const ordered = [...preferred, ...rest]
+
+  let out = ''
+  let used = 0
+  const encoder = new TextEncoder()
+  for (const section of ordered) {
+    const piece = `${section.title}\n${section.lines.join('\n')}`.trim()
+    if (piece === '') continue
+    const size = encoder.encode(piece).length
+    if (used + size <= budgetBytes) {
+      out += (out === '' ? '' : '\n') + piece
+      used += size
+      continue
+    }
+    const room = budgetBytes - used
+    if (room > 120) {
+      const clipped = clipBytes(piece, room)
+      if (clipped !== undefined) out += (out === '' ? '' : '\n') + clipped
+    }
+    break
+  }
+  return out === '' ? undefined : out
 }
 
 /**
@@ -309,7 +402,7 @@ function findHandoff(cwd, handoffPaths) {
 }
 
 /** 渲染指针文本：标题、时间、id，加一个文件路径或那个会话的最后两句。 */
-function renderPointer({ previousId, createdAt, title, handoff, tail, language, maxTitleChars }) {
+function renderPointer({ previousId, createdAt, title, handoff, continuity, language, maxTitleChars }) {
   const label = clip(title ?? previousId, maxTitleChars)
   const shortId = shortSessionId(previousId)
   const created = formatDate(createdAt)
@@ -324,6 +417,13 @@ function renderPointer({ previousId, createdAt, title, handoff, tail, language, 
       : `${head}. If this really continues it, read ${handoff.display} (${updated}) before planning.`
   }
 
+  if (continuity?.kind === 'summary') {
+    return language === 'zh'
+      ? `${head}。它没留下交接文档，但它被自动压缩过，这是那份摘要里最要紧的几节：\n${continuity.text}`
+      : `${head}. No handoff file, but that session was auto-compacted; these are the parts of its digest that matter:\n${continuity.text}`
+  }
+
+  const tail = continuity?.kind === 'tail' ? continuity : undefined
   const parts = []
   if (tail?.user !== undefined) {
     // 用「用户／助手」而不是「你／它」：中文里的「你」会让模型分不清是谁说的话。
