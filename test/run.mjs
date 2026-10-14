@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureStubs } from './stubs.mjs'
+import { ensureStubs, cleanupStubs } from './stubs.mjs'
 
 ensureStubs()
 
@@ -212,15 +212,19 @@ test('超长标题被截断', async () => {
 })
 
 let failed = 0
-for (const [title, fn] of cases) {
-  try {
-    await fn()
-    console.log(`ok   ${title}`)
-  } catch (error) {
-    failed += 1
-    console.log(`FAIL ${title}`)
-    console.log(`     ${error instanceof Error ? error.message : String(error)}`)
+try {
+  for (const [title, fn] of cases) {
+    try {
+      await fn()
+      console.log(`ok   ${title}`)
+    } catch (error) {
+      failed += 1
+      console.log(`FAIL ${title}`)
+      console.log(`     ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
+} finally {
+  cleanupStubs()
 }
 
 console.log(failed === 0 ? `\n全部 ${cases.length} 项通过` : `\n${failed}/${cases.length} 项失败`)

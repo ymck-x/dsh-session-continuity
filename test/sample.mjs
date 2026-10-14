@@ -7,7 +7,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureStubs } from './stubs.mjs'
+import { cleanupStubs, ensureStubs } from './stubs.mjs'
 
 ensureStubs()
 
@@ -67,3 +67,5 @@ await sample({ language: 'en', cwd: workspace, records: [selfRecord, previousRec
 await sample({ language: 'zh', cwd: workspace, records: [selfRecord, previousRecord], label: '中文 · 有交接文档' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord, previousRecord], label: '英文 · 无交接文档' })
 await sample({ language: 'en', cwd: bare, records: [selfRecord], label: '工作区里没有上一个会话' })
+
+cleanupStubs()
