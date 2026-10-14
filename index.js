@@ -103,10 +103,15 @@ async function buildPointer(ctx, agent, options, signal) {
   const others = records.filter((record) => record?.header?.id !== undefined && record.header.id !== selfId)
   if (others.length === 0) return undefined
 
+  // 子代理会话（带 parentSession）不是用户要接续的那场对话——它们在时间上总是更新，
+  // 会让指针指向一次工具调用而不是上一场真实对话。只有工作区里找不到主会话时才退回它们。
+  const primary = others.filter((record) => record.header.parentSession == null)
+  const pool = primary.length > 0 ? primary : others
+
   const sameWorkspace = cwd === undefined
     ? []
-    : others.filter((record) => record.header.cwd === cwd)
-  const previous = sameWorkspace[0] ?? others[0]
+    : pool.filter((record) => record.header.cwd === cwd)
+  const previous = sameWorkspace[0] ?? pool[0]
 
   const title = await readTitle(ctx, previous, signal)
   const handoff = findHandoff(cwd, options.handoffPaths)

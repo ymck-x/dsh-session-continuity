@@ -47,7 +47,7 @@ Continuity: previous session "给 DSH 写一个会话接续插件" (2026-10-13, 
 固定版本，推荐：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.1.1.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.1.3.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -59,7 +59,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.1.1
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.1.3
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -68,6 +68,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.1.3` | 修复：子代理会话不再被当成「上一个会话」（端到端验证时发现） |
 | `v0.1.2` | 仅文档：补上端到端验证结论（重启后注入成功，附会话日志证据） |
 | `v0.1.1` | 补 `peerDependenciesMeta.optional`（消除 pnpm 的 peer 警告）与仓库元数据 |
 | `v0.1.0` | 首个可安装版本 |
@@ -126,6 +127,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 - 只在本会话的**第一个模型步骤**（turn 1 / step 1）注入一次。重试不会重跑 pre-step，所以不会重复注入；用 `--continue` 恢复的会话不会注入。
 - 「上一个会话」取 `sessionQuery.listSessions()` 里排在最前、且工作目录相同的那一个；没有同目录的就退到全局最新一个。
+- **子代理会话不算「上一个会话」**（会话 header 带 `parentSession` 的那些）。子代理在时间上永远比真实对话更新，不排除的话指针会指向一次工具调用——这个行为是端到端验证时从真实注入里发现的。只有工作区里找不到主会话时才退回它们。
 - 标题优先从投影缓存读（不读会话日志），缓存给不出时才折叠那个会话的日志。两者都是本地 IO，不花 token。
 - 任何失败（会话查询服务不可用、文件读不到、标题读不出）都只是**不注入**，原样放行这一轮，不影响正常对话。
 - 注入的消息带来源 `kind: 'session-continuity'`，在会话记录里可识别、可回放，不会被当作用户手打的输入。
@@ -139,7 +141,7 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 
 ## 验证状态
 
-**逻辑级**：`node test/run.mjs`，12 项通过——覆盖同工作目录优先、全局回退、有无交接文档、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断。
+**逻辑级**：`node test/run.mjs`，14 项通过——覆盖同工作目录优先、全局回退、有无交接文档、中英两种文本、只注入一次、下游拒绝透传、查询失败降级、`enabled: false`、标题缺失回退、超长标题截断、子代理会话的排除与回退。
 
 **真实 DSH 进程里确认到的**（0.2.0-rc.2）：
 

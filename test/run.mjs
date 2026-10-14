@@ -187,6 +187,37 @@ test('enabled: false 完全不注册', () => {
   assert.equal(handlers.size, 0)
 })
 
+test('子代理会话不会被当成上一个会话', async () => {
+  const subagentRecord = {
+    header: { id: 'subagent-2222', cwd: workspace, createdAt: Date.UTC(2026, 9, 12), parentSession: 'session-abcdef12-3456' },
+  }
+  const { ctx, handlers } = makeContext([selfRecord, subagentRecord, previousRecord], {
+    'session-abcdef12-3456': '重构插件索引',
+  })
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /重构插件索引/)
+  assert.doesNotMatch(text, /subagent-2222/)
+})
+
+test('工作区里只有子代理会话时退回到它', async () => {
+  const subagentRecord = {
+    header: { id: 'subagent-2222', cwd: workspace, createdAt: Date.UTC(2026, 9, 12), parentSession: 'session-abcdef12-3456' },
+  }
+  const { ctx, handlers } = makeContext([selfRecord, subagentRecord], { 'subagent-2222': '一次工具调用' })
+  apply(ctx, {})
+  const decision = await preStep(handlers.get('agent/pre-step'), {
+    agent: { id: 'session-self', session: { header: selfRecord.header } },
+    decision: { kind: 'enter', messages: [] },
+  })
+  const text = injected(decision).content[0].text
+  assert.match(text, /一次工具调用/)
+})
+
 test('标题缺失时退回会话 id', async () => {
   const { ctx, handlers } = makeContext([selfRecord, previousRecord])
   apply(ctx, {})
