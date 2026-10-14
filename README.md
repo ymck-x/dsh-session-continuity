@@ -59,14 +59,22 @@ Tail — user: "把导出按钮改成能选 CSV 和 XLSX" | assistant: "CSV 已�
 
 ## 安装
 
-装完都执行一次 `dsh --profile <profile> --dump-config`，确认能看到本组合包贡献的那一层，再启动。
+三种方式，推荐顺序如下。装完都执行一次 `dsh --profile <profile> --dump-config`，确认能看到本组合包贡献的那一层，再启动。
 
-### 从 GitHub 安装（别人拿到这个仓库时用这条）
-
-固定版本，推荐：
+### 从 npm 安装（推荐）
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.1.tar.gz
+dsh plugin --profile <profile> add dsh-session-continuity
+```
+
+锁死版本就写 `dsh-session-continuity@0.2.2`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
+
+### 从 GitHub 安装（不想走 npm，或要离线分发时）
+
+固定版本：
+
+```sh
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.2.2.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -78,7 +86,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.1
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.2.2
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -87,6 +95,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.2.2` | 仅文档：安装章节补上「从 npm 安装」 |
 | `v0.2.1` | 修复：引用文本里的代码围栏压平、交接文档路径统一正斜杠（真机验证时发现） |
 | `v0.2.0` | 没交接文档时补上「上个会话的最后两句」（受 `tailBytes` 约束） |
 | `v0.1.3` | 修复：子代理会话不再被当成「上一个会话」（端到端验证时发现） |
