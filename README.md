@@ -81,19 +81,17 @@
 
 ## 安装
 
-三种方式。**npm 上落后一个版本（`0.3.1`），所以「要哪一版」决定你走哪条路**：只要装得上就用 npm，要 `0.3.2` 就用 tag 地址。装完都执行一次 `dsh --profile <profile> --dump-config`，确认能看到本组合包贡献的那一层，再启动。
+三种方式，推荐顺序如下。装完都执行一次 `dsh --profile <profile> --dump-config`，确认能看到本组合包贡献的那一层，再启动。
 
-### 从 npm 安装
+### 从 npm 安装（推荐）
 
 ```sh
 dsh plugin --profile <profile> add dsh-session-continuity
 ```
 
-> **注意：npm 上当前是 `0.3.1`。** `0.3.2`（修掉标题回退路径那条 bug）**尚未发布到 npm**，所以按包名安装会拿到 `0.3.1`，写 `dsh-session-continuity@0.3.2` 会 404。**要 `0.3.2` 请用下一节的 tag 地址。**
+锁死版本就写 `dsh-session-continuity@0.3.2`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
 
-锁死版本就写 `dsh-session-continuity@0.3.1`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
-
-### 从 GitHub 安装（要 `0.3.2` 用这里，或要离线分发时）
+### 从 GitHub 安装（不想走 npm，或要离线分发时）
 
 固定版本：
 
