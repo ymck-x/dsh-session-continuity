@@ -40,8 +40,8 @@ function makeContext(cwd, records, surfaceEvents = tailSurface) {
         async listSessions() {
           return records
         },
-        async readTitleSnapshot(id) {
-          return titles[id] === undefined ? { session: { id } } : { session: { id }, title: titles[id] }
+        async readTitle(id) {
+          return titles[id] === undefined ? undefined : { title: titles[id] }
         },
         async readSurface(id) {
           return { session: { id }, capturedThroughSeq: null, events: surfaceEvents }

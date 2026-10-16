@@ -368,7 +368,10 @@ async function readTitle(ctx, record, signal) {
   const cached = cachedTitle(ctx, record)
   if (cached !== undefined) return cached
   try {
-    const snapshot = await ctx.sessionQuery.readTitleSnapshot(record.header.id, signal)
+    // 用 `readTitle`：它直接返回标题快照（`SessionTitleSnapshot`），`.title` 就是字符串。
+    // `readTitleSnapshot` 返回的是 `{ session, title: SessionTitleSnapshot }`，标题还嵌一层，
+    // 按 `typeof title === 'string'` 取会永远落空。
+    const snapshot = await ctx.sessionQuery.readTitle(record.header.id, signal)
     const title = snapshot?.title
     return typeof title === 'string' && title.trim() !== '' ? title.trim() : undefined
   } catch {
