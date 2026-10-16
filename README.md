@@ -1,6 +1,8 @@
 # dsh-session-continuity
 
-新会话开始时，注入一条很小的**接续指针**：上一个会话是谁、工作区里有没有交接文档。
+**换个窗口继续干活，代价约 55 token——不调模型，不生成任何东西。**
+
+新会话开始时，注入一条很小的**接续指针**：上一个会话是谁、工作区里有没有交接文档。没有交接文档时，它直接复用 DSH 已经写好的压缩摘要，而不是让模型再写一遍。同一件事，`@` 引用上一个会话的上限在百万 token 窗口下达约 20 万 token，这里约 55 到 250 token、一次。
 
 两件事值得先说清楚：
 
@@ -87,14 +89,14 @@
 dsh plugin --profile <profile> add dsh-session-continuity
 ```
 
-锁死版本就写 `dsh-session-continuity@0.2.3`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
+锁死版本就写 `dsh-session-continuity@0.3.2`。刚发布的版本可能被 pnpm 的 `minimumReleaseAge` 供应链策略挡一下——`dsh plugin` 会自动把它记进 profile 的 `minimumReleaseAgeExclude`，只提示、不报错。
 
 ### 从 GitHub 安装（不想走 npm，或要离线分发时）
 
 固定版本：
 
 ```sh
-dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.3.1.tar.gz
+dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continuity/archive/refs/tags/v0.3.2.tar.gz
 ```
 
 跟随 `main` 最新快照（版本会漂）：
@@ -106,7 +108,7 @@ dsh plugin --profile <profile> add https://github.com/ymck-x/dsh-session-continu
 也可以直接给 git 地址，`dsh plugin` 会把它转发给 pnpm：
 
 ```sh
-dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.3.1
+dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-continuity.git#v0.3.2
 ```
 
 **为什么要打 tag**：`archive/refs/tags/<tag>.tar.gz` 是唯一能把「装的到底是哪一版」固定下来的地址——`heads/main` 会随每次提交变化，pnpm 锁文件也就锁不住；git 地址不带 `#<tag>` 同样会漂。升级就是打新 tag、换 tag 重新 `add`。另外 git 与 tarball 这两种 spec 需要先抓取，peer 兼容性是在下载之后才判定的。
@@ -115,6 +117,7 @@ dsh plugin --profile <profile> add git+https://github.com/ymck-x/dsh-session-con
 
 | tag | 说明 |
 |---|---|
+| `v0.3.2` | 修：`readTitle` 取错返回层级，「投影缓存给不出标题时折叠日志」这条回退路径从未生效；文档补上压缩摘要分支的验证边界 |
 | `v0.3.1` | 修：这一轮没有「用户手打」的消息时（例如子代理），语言判断改用上个会话的标题兜底，不再退回英文 |
 | `v0.3.0` | 没有交接文档时，优先复用上一个会话的压缩摘要（DSH 已生成，零成本），比原来自动写一份更划算 |
 | `v0.2.3` | 语言默认改为跟随用户（`auto`）；指针开头加「与当前请求无关就忽略」；中文角色称呼改为「用户／助手」 |
@@ -213,6 +216,8 @@ dsh plugin --profile <profile> remove dsh-session-continuity
 - `apply(ctx, config)` 会被调用，`inject: ['sessionQuery']` 得到满足，`Config` 能通过**真** schemastery 的校验，config 会连默认补齐一起传进来。实测传入 `{"language":"en","enabled":true}` 时，`apply` 收到的是 `{"enabled":true,"language":"en","handoffPaths":[]}`——没提供的数组字段被补成了**空数组**，所以 `apply` 里对空数组做了兜底。
 - 真实 `agent/pre-step` 上的形状：新会话的第一次请求是 `turn=1, step=1`；`agent.session.header.cwd` 是工作区绝对路径；`ctx.sessionQuery.listSessions()` 一次返回 154 条会话记录。
 - **四条分支都在真机上跑过**（重启 DSH 后用全新子会话触发，原文从会话日志里读）：英文 + 有交接文档 147 字节；英文 + 无交接文档（带结尾两句）394 字节；中文 + 有交接文档 154 字节；中文 + 无交接文档 559 字节。中文那两次顺带证明了「用户在 `cordis.patch.yml` 里覆盖 `config`」确实生效——home 级补丁的改动会被热加载，不用再重启。
+- **上面四条只覆盖「交接文档」与「最后两句」两级。中间那一级——复用压缩摘要——没有真机记录**：扫本机 186 个会话日志、找到 4 次真实注入，全部走「最后两句」，因为被指向的上一个会话本身都没有被压缩过。它的**形状**已对着真实日志核对：摘要正文挂在 `user/message` 上，`data = { content, source, role, id }`、`source = { kind: 'compact-checkpoint', compactionId }`，正文里含 `<compacted-summary>` 标签；另有一个 `compaction/summary` 事件（`data.summary`）存着同一份摘要，本插件不读它。本机 5 条检查点的 `surfaceOp` 全是 `{ op: 'replace', startSeq, endSeq }`——替换掉旧消息后自己留在表层，所以 `readSurface()` 应当能返回它。
+  > 已知未覆盖的变体：日志里还有 `source = { kind: 'plugin', plugin, compactionId }` 的检查点消息（同样带 `compactionId`）。当前代码只认 `compact-checkpoint`，会漏掉这一种。
 
 **踩到的两个坑（都已修，值得记住）**：
 
